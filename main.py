@@ -1,21 +1,23 @@
 from flask import Flask, request
 from flask_cors import CORS
 import requests
-import telebot
+import os
 
 
 app = Flask(__name__)
+
 CORS(app)
 
 
-# Вставь сюда НОВЫЙ токен после перевыпуска в BotFather
-BOT_TOKEN = "8695680481:AAHhVE5b3eft3t27Mt61QDxWaltnl0CCgEc"
-
-bot = telebot.TeleBot(BOT_TOKEN)
+# Cloudflare Turnstile Secret Key
+TURNSTILE_SECRET = os.getenv(
+    "TURNSTILE_SECRET"
+)
 
 
 @app.route("/")
 def home():
+
     return "Server works!"
 
 
@@ -24,147 +26,183 @@ def verify():
 
     data = request.json
 
-    telegram_id = data.get("id")
-    username = data.get("username", "unknown")
+
+    # Получаем данные из Mini App
+    telegram_id = data.get(
+        "id"
+    )
+
+    username = data.get(
+        "username",
+        "unknown"
+    )
+
+
+    # Получаем Cloudflare token
+    turnstile_token = data.get(
+        "turnstile_token"
+    )
+
+
+    if not turnstile_token:
+
+        return {
+            "success": False,
+            "error": "No Cloudflare token"
+        }, 400
+
+
+
+    # Проверка Cloudflare
+    try:
+
+        cloudflare_check = requests.post(
+
+            "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+
+            data={
+
+                "secret": TURNSTILE_SECRET,
+
+                "response": turnstile_token
+
+            },
+
+            timeout=10
+
+        )
+
+
+        cloudflare_result = cloudflare_check.json()
+
+
+
+    except Exception as e:
+
+
+        return {
+
+            "success": False,
+
+            "error": str(e)
+
+        }, 500
+
+
+
+    # Если Cloudflare не подтвердил
+
+    if not cloudflare_result.get(
+        "success"
+    ):
+
+        return {
+
+            "success": False,
+
+            "error": "Cloudflare verification failed"
+
+        }, 403
+
 
 
     # Получаем IP пользователя
+
     ip = request.headers.get(
         "X-Forwarded-For",
         request.remote_addr
     )
 
-    # Если прокси передал несколько IP
+
+    # Если несколько IP через прокси
+
     if ip and "," in ip:
+
         ip = ip.split(",")[0].strip()
 
 
+
     # Получаем информацию об IP
+
     try:
 
         geo = requests.get(
+
             f"https://ipwho.is/{ip}",
+
             timeout=10
+
         ).json()
 
+
     except Exception:
+
 
         geo = {}
 
 
 
-    country = geo.get("country", "неизвестно")
-    city = geo.get("city", "неизвестно")
-    region = geo.get("region", "неизвестно")
-
-    timezone = geo.get(
-        "timezone",
-        {}
-    ).get(
-        "id",
-        "неизвестно"
-    )
-
-    latitude = geo.get(
-        "latitude",
-        "нет"
-    )
-
-    longitude = geo.get(
-        "longitude",
-        "нет"
-    )
+    result = {
 
 
-    connection = geo.get(
-        "connection",
-        {}
-    )
-
-    isp = connection.get(
-        "isp",
-        "неизвестно"
-    )
-
-    asn = connection.get(
-        "asn",
-        "неизвестно"
-    )
-
-
-    message = f"""
-🌐 Новая проверка
-
-👤 Пользователь:
-@{username}
-
-🆔 Telegram ID:
-{telegram_id}
-
-
-📡 IP:
-{ip}
-
-
-🌍 Страна:
-{country}
-
-🏙 Город:
-{city}
-
-📍 Регион:
-{region}
-
-
-🕒 Часовой пояс:
-{timezone}
-
-
-📌 Координаты:
-{latitude}, {longitude}
-
-
-📡 Провайдер:
-{isp}
-
-
-🔢 AS:
-{asn}
-"""
-
-
-    # Отправляем пользователю сообщение
-    if telegram_id:
-
-        try:
-
-            bot.send_message(
-                telegram_id,
-                message
-            )
-
-        except Exception as e:
-
-            print(
-                "Ошибка Telegram:",
-                e
-            )
-
-
-    return {
         "success": True,
 
+
+        "telegram_id": telegram_id,
+
+
+        "username": username,
+
+
         "ip": ip,
-        "country": country,
-        "city": city,
-        "provider": isp
+
+
+        "country":
+        geo.get("country"),
+
+
+        "city":
+        geo.get("city"),
+
+
+        "region":
+        geo.get("region"),
+
+
+        "timezone":
+        geo.get("timezone", {}).get("id"),
+
+
+        "latitude":
+        geo.get("latitude"),
+
+
+        "longitude":
+        geo.get("longitude"),
+
+
+        "provider":
+        geo.get("connection", {}).get("isp"),
+
+
+        "asn":
+        geo.get("connection", {}).get("asn")
+
     }
+
+
+
+    return result
 
 
 
 if __name__ == "__main__":
 
+
     app.run(
+
         host="0.0.0.0",
+
         port=5000
+
     )
